@@ -1,0 +1,49 @@
+
+name: Parse UFI003 Device Tree
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ufi003-running.dtb"
+      - ".github/workflows/parse-dtb.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  parse:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install device tree compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler
+
+      - name: Verify and decompile DTB
+        run: |
+          set -eu
+          test -s ufi003-running.dtb
+          sha256sum ufi003-running.dtb
+          dtc -I dtb -O dts -o ufi003-running.dts ufi003-running.dtb
+
+          echo "===== Device identity ====="
+          grep -nE 'model =|compatible =' ufi003-running.dts | head -30 || true
+
+          echo "===== Memory and reserved memory ====="
+          grep -nE 'memory@|reserved-memory|mpss@|wcnss@|mba@|gps@' ufi003-running.dts | head -100 || true
+
+          echo "===== USB, Bluetooth and Wi-Fi ====="
+          grep -niE 'bluetooth|wcnss|wifi|wlan|usb@|usb3|udc|gadget' ufi003-running.dts | head -100 || true
+
+      - name: Upload parsed device tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: ufi003-device-tree-analysis
+          path: |
+            ufi003-running.dts
+            ufi003-running.dtb
+          retention-days: 7
