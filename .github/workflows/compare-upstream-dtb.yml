@@ -1,0 +1,96 @@
+
+name: Compare UFI003 Device Tree
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ufi003-running.dtb"
+      - ".github/workflows/compare-upstream-dtb.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          path: project
+
+      - name: Checkout MSM8916 mainline
+        uses: actions/checkout@v4
+        with:
+          repository: msm8916-mainline/linux
+          ref: wip/msm8916/7.0
+          path: kernel
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler bc bison flex libssl-dev libelf-dev
+
+      - name: Verify input
+        run: |
+          set -eu
+          test -s project/ufi003-running.dtb
+          sha256sum project/ufi003-running.dtb
+
+      - name: Compile upstream UFI001C device tree
+        working-directory: kernel
+        run: |
+          set -eu
+          test -s arch/arm64/boot/dts/qcom/msm8916-thwc-ufi001c.dts
+          make ARCH=arm64 defconfig
+          make ARCH=arm64 -j2 arch/arm64/boot/dts/qcom/msm8916-thwc-ufi001c.dtb
+
+      - name: Generate comparison report
+        run: |
+          set -eu
+          mkdir -p output
+
+          cp project/ufi003-running.dtb output/running-device.dtb
+          cp kernel/arch/arm64/boot/dts/qcom/msm8916-thwc-ufi001c.dtb output/upstream-baseline.dtb
+
+          dtc -I dtb -O dts -o output/running-device.dts output/running-device.dtb
+          dtc -I dtb -O dts -o output/upstream-baseline.dts output/upstream-baseline.dtb
+
+          {
+            echo "UFI003 device tree comparison"
+            echo "WARNING: upstream baseline is for UFI001C/001B, not confirmed UFI003 hardware."
+            echo "Do not flash this baseline directly."
+            echo
+
+            for name in running-device upstream-baseline; do
+              file="output/${name}.dtb"
+              echo "===== ${name} ====="
+              for node in \
+                / \
+                /memory@80000000 \
+                /reserved-memory/mpss@86800000 \
+                /reserved-memory/wcnss \
+                /reserved-memory/mba \
+                /soc@0/remoteproc@4080000 \
+                /soc@0/remoteproc@4080000/mpss \
+                /soc@0/remoteproc@a204000 \
+                /soc@0/usb@78d9000 \
+                /soc@0/mmc@7824900; do
+                echo "--- ${node}"
+                fdtget -p "$file" "$node" 2>/dev/null || true
+              done
+              echo
+            done
+
+            echo "The disabled status alone does not prove that memory can be safely reclaimed."
+            echo "Do not erase modem firmware or modem calibration partitions."
+          } | tee output/comparison-report.txt
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ufi003-upstream-dtb-comparison
+          path: output/
+          retention-days: 7
